@@ -6,9 +6,9 @@ import numpy as np
 from collections import defaultdict
 from multiprocessing import Process, Queue
 
-def build_index(dataset_name):
+def build_index(data_dir, dataset_name):
 
-    ui_mat = np.loadtxt('data/%s.txt' % dataset_name, dtype=np.int32)
+    ui_mat = np.loadtxt(f'{data_dir}/{dataset_name}.txt', dtype=np.int32)
 
     n_users = ui_mat[:, 0].max()
     n_items = ui_mat[:, 1].max()
@@ -66,7 +66,6 @@ def sample_function(user_train, usernum, itemnum, batch_size, maxlen, result_que
             one_batch.append(sample(uids[counter % usernum]))
             counter += 1
         result_queue.put(zip(*one_batch))
-len(one_batch)
 
 
 class WarpSampler(object):
@@ -96,7 +95,7 @@ class WarpSampler(object):
 
 
 # train/val/test data generation
-def data_partition(fname):
+def data_partition(data_dir, fname):
     usernum = 0
     itemnum = 0
     User = defaultdict(list)
@@ -104,7 +103,7 @@ def data_partition(fname):
     user_valid = {}
     user_test = {}
     print("assume user/item index starting from 1")
-    f = open('data/%s.txt' % fname, 'r')
+    f = open(f'{data_dir}/{fname}.txt', 'r')
     for line in f:
         u, i = line.rstrip().split(' ')
         u = int(u)

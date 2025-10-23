@@ -16,20 +16,21 @@ def str2bool(s):
 #%%
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', default="ml-1m", type=str)
-parser.add_argument('--train_dir', default="default", type=str)
-parser.add_argument('--batch_size', default=128, type=int)
+parser.add_argument('--data-dir', default="../data/sasrec/data", type=str)
+parser.add_argument('--train-dir', default="default", type=str)
+parser.add_argument('--batch-size', default=128, type=int)
 parser.add_argument('--lr', default=0.001, type=float)
 parser.add_argument('--maxlen', default=200, type=int)
-parser.add_argument('--hidden_units', default=50, type=int)
-parser.add_argument('--num_blocks', default=2, type=int)
-parser.add_argument('--num_epochs', default=1000, type=int)
-parser.add_argument('--num_heads', default=1, type=int)
-parser.add_argument('--dropout_rate', default=0.2, type=float)
-parser.add_argument('--l2_emb', default=0.0, type=float)
+parser.add_argument('--hidden-units', default=50, type=int)
+parser.add_argument('--num-blocks', default=2, type=int)
+parser.add_argument('--num-epochs', default=1000, type=int)
+parser.add_argument('--num-heads', default=1, type=int)
+parser.add_argument('--dropout-rate', default=0.2, type=float)
+parser.add_argument('--l2-emb', default=0.0, type=float)
 parser.add_argument('--device', default='cuda', type=str)
-parser.add_argument('--inference_only', default=False, type=str2bool)
-parser.add_argument('--state_dict_path', default=None, type=str)
-parser.add_argument('--norm_first', action='store_true', default=False)
+parser.add_argument('--inference-only', default=False, type=str2bool)
+parser.add_argument('--state-dict-path', default=None, type=str)
+parser.add_argument('--norm-first', action='store_true', default=False)
 try:
     args = parser.parse_args()
 except: 
@@ -45,10 +46,10 @@ f.close()
 
 
 #%% data loading
-u2i_index, i2u_index = build_index(args.dataset) # user-item pair interaction, item-user pair interaction
+u2i_index, i2u_index = build_index(args.data_dir, args.dataset) # user-item pair interaction, item-user pair interaction
 
 # global dataset
-dataset = data_partition(args.dataset)
+dataset = data_partition(args.data_dir, args.dataset)
 [user_train, user_valid, user_test, usernum, itemnum] = dataset
 
 
@@ -58,7 +59,6 @@ total_seq_len = 0.0
 for u in user_train:
     total_seq_len += len(user_train[u])
 print('average sequence length: %.2f' % (total_seq_len / len(user_train)))
-
 
 
 #%%
@@ -166,3 +166,5 @@ for epoch in range(epoch_start_idx, args.num_epochs + 1):
 f.close()
 sampler.close()
 print("Done")
+
+# %%
