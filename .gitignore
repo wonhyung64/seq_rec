@@ -21,6 +21,7 @@ weights
 logs
 fig
 etc
+eda
 
 *.pt
 *.pth
@@ -29,6 +30,8 @@ etc
 *.ascii
 *.csv
 *.txt
+*.jsonl
+*.png
 
 
 # Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
