@@ -32,6 +32,7 @@ parser.add_argument('--state-dict-path', default=None, type=str)
 parser.add_argument('--norm-first', action='store_true', default=False)
 parser.add_argument('--random-seed', default=0, type=int)
 parser.add_argument("--device", type=str, default="none")
+parser.add_argument('--cred-dir', default="../", type=str)
 try:
     args = parser.parse_args()
 except: 
@@ -57,7 +58,7 @@ except:
 
 wandb_login = False
 try:
-    wandb_login = wandb.login(key = open(f"{args.data_dir}/wandb_key.txt", 'r').readline())
+    wandb_login = wandb.login(key = open(f"{args.cred_dir}/wandb_key.txt", 'r').readline())
 except:
     pass
 
