@@ -50,7 +50,8 @@ EOF
 
 
 ENV=/home1/wonhyung64/anaconda3/envs/openmmlab/bin/python3
-DATA_DIR=/data/sasrec/data
+DATA_DIR=home1/wonhyung64/seq_rec/data/sasrec/data
+CRED_DIR=home1/wonhyung64/seq_rec
 
 
 experiments=(
@@ -68,7 +69,7 @@ COUNTER=0
 
 for index in ${!experiments[*]}; do
 
-    echo "\"$ENV ${experiments[$index]} --data-dir=$DATA_DIR\"" >> runner.sh
+    echo "\"$ENV ${experiments[$index]} --data-dir=$DATA_DIR --cred-dir=$CRED_DIR\"" >> runner.sh
     (( COUNTER++ ))
 
     if [ "$COUNTER" -eq 4  ]; then
