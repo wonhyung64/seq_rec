@@ -50,8 +50,8 @@ EOF
 
 
 ENV=/home1/wonhyung64/anaconda3/envs/openmmlab/bin/python3
-DATA_DIR=home1/wonhyung64/Github/seq_rec/data/sasrec/data
-CRED_DIR=home1/wonhyung64/Github/seq_rec
+DATA_DIR=/home1/wonhyung64/Github/seq_rec/data/sasrec/data
+CRED_DIR=/home1/wonhyung64/Github/seq_rec
 
 
 experiments=(
