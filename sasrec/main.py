@@ -1,23 +1,24 @@
 #%%
 import os
+import sys
 import time
 import torch
 import argparse
+import numpy as np
+from datetime import datetime
 
 from model import SASRec
-from utils import *
-
-def str2bool(s):
-    if s not in {'false', 'true'}:
-        raise ValueError('Not a valid boolean string')
-    return s == 'true'
+from utils import set_seed, set_device
+from evaluate import evaluate, evaluate_valid
+from dataset import data_partition, build_index, WarpSampler
 
 
 #%%
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', default="ml-1m", type=str)
 parser.add_argument('--data-dir', default="../data/sasrec/data", type=str)
-parser.add_argument('--train-dir', default="default", type=str)
+parser.add_argument('--weights-dir', default="weights", type=str)
+parser.add_argument('--evaluate-interval', default=20, type=int)
 parser.add_argument('--batch-size', default=128, type=int)
 parser.add_argument('--lr', default=0.001, type=float)
 parser.add_argument('--maxlen', default=200, type=int)
@@ -27,103 +28,90 @@ parser.add_argument('--num-epochs', default=1000, type=int)
 parser.add_argument('--num-heads', default=1, type=int)
 parser.add_argument('--dropout-rate', default=0.2, type=float)
 parser.add_argument('--l2-emb', default=0.0, type=float)
-parser.add_argument('--device', default='cuda', type=str)
-parser.add_argument('--inference-only', default=False, type=str2bool)
 parser.add_argument('--state-dict-path', default=None, type=str)
 parser.add_argument('--norm-first', action='store_true', default=False)
+parser.add_argument('--random-seed', default=0, type=int)
+parser.add_argument("--device", type=str, default="none")
 try:
     args = parser.parse_args()
 except: 
     args = parser.parse_args([])
 
+args.expt_num = f'{datetime.now().strftime("%y%m%d_%H%M%S_%f")}'
+set_seed(args.random_seed)
+args.device = set_device(args.device)
 
-#%% configuration saving
-if not os.path.isdir(args.dataset + '_' + args.train_dir):
-    os.makedirs(args.dataset + '_' + args.train_dir)
-with open(os.path.join(args.dataset + '_' + args.train_dir, 'args.txt'), 'w') as f:
-    f.write('\n'.join([str(k) + ',' + str(v) for k, v in sorted(vars(args).items(), key=lambda x: x[0])]))
-f.close()
+folder = args.dataset + '_' + args.weights_dir
+os.makedirs(folder, exist_ok=True)
+fname = 'sasrec.lr={}.block={}.head={}.unit={}.maxlen={}.batch={}.expt={}.pth'
+args.fname = fname.format(args.lr, args.num_blocks, args.num_heads, args.hidden_units, args.maxlen, args.batch_size, args.expt_num)
+
+
+#%%
+try:
+    import wandb
+except: 
+    import subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "wandb"])
+    import wandb
+
+wandb_login = False
+try:
+    wandb_login = wandb.login(key = open(f"{args.data_dir}/wandb_key.txt", 'r').readline())
+except:
+    pass
+
+if wandb_login:
+    configs = vars(args)
+    wandb_var = wandb.init(project="seq_rec", config=configs)
+    expt_name = f"sasrec_{args.expt_num}"
+    wandb.run.name = expt_name
 
 
 #%% data loading
-u2i_index, i2u_index = build_index(args.data_dir, args.dataset) # user-item pair interaction, item-user pair interaction
-
-# global dataset
+item_seqs, user_seqs = build_index(args.data_dir, args.dataset)
 dataset = data_partition(args.data_dir, args.dataset)
-[user_train, user_valid, user_test, usernum, itemnum] = dataset
+[item_seqs_train, item_seqs_valid, item_seqs_test, num_users, num_items] = dataset
 
-
-# num_batch = len(user_train) // args.batch_size # tail? + ((len(user_train) % args.batch_size) != 0)
-num_batch = (len(user_train) - 1) // args.batch_size + 1
+total_batch = (num_users-1) // args.batch_size + 1
 total_seq_len = 0.0
-for u in user_train:
-    total_seq_len += len(user_train[u])
-print('average sequence length: %.2f' % (total_seq_len / len(user_train)))
+for u in item_seqs_train:
+    total_seq_len += len(item_seqs_train[u])
+print('average sequence length: %.2f' % (total_seq_len / num_users))
+
+sampler = WarpSampler(item_seqs_train, num_users, num_items, batch_size=args.batch_size, maxlen=args.maxlen, n_workers=1)
 
 
 #%%
-# if __name__ == "__main__":
-sampler = WarpSampler(user_train, usernum, itemnum, batch_size=args.batch_size, maxlen=args.maxlen, n_workers=1)
+model = SASRec(num_users, num_items, args).to(args.device)
 
-#%% logging
-f = open(os.path.join(args.dataset + '_' + args.train_dir, 'log.txt'), 'w')
-f.write('epoch (val_ndcg, val_hr) (test_ndcg, test_hr)\n')
-
-
-#%%
-model = SASRec(usernum, itemnum, args).to(args.device) # no ReLU activation in original SASRec implementation?
-   
 for name, param in model.named_parameters():
     try:
         torch.nn.init.xavier_normal_(param.data)
     except:
-        pass # just ignore those failed init layers
+        pass
+model.pos_emb.weight.data[0, :] = torch.zeros_like(model.pos_emb.weight.data[0, :])
+model.item_emb.weight.data[0, :] = torch.zeros_like(model.item_emb.weight.data[0, :])
 
-model.pos_emb.weight.data[0, :] = 0 # positional embedding init
-model.item_emb.weight.data[0, :] = 0
-
-# this fails embedding init 'Embedding' object has no attribute 'dim'
-# model.apply(torch.nn.init.xavier_uniform_)
-    
-model.train() # enable model training
-    
-epoch_start_idx = 1
-if args.state_dict_path is not None:
-    try:
-        model.load_state_dict(torch.load(args.state_dict_path, map_location=torch.device(args.device)))
-        tail = args.state_dict_path[args.state_dict_path.find('epoch=') + 6:]
-        epoch_start_idx = int(tail[:tail.find('.')]) + 1
-    except: # in case your pytorch version is not 1.6 etc., pls debug by pdb if load weights failed
-        print('failed loading state_dicts, pls check file path: ', end="")
-        print(args.state_dict_path)
-        print('pdb enabled for your quick check, pls type exit() if you do not need it')
-        import pdb; pdb.set_trace()
-            
-    
-if args.inference_only:
-    model.eval()
-    t_test = evaluate(model, dataset, args)
-    print('test (NDCG@10: %.4f, HR@10: %.4f)' % (t_test[0], t_test[1]))
-    
-# ce_criterion = torch.nn.CrossEntropyLoss()
-# https://github.com/NVIDIA/pix2pixHD/issues/9 how could an old bug appear again...
-bce_criterion = torch.nn.BCEWithLogitsLoss() # torch.nn.BCELoss()
+bce_criterion = torch.nn.BCEWithLogitsLoss()
 adam_optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.98))
 
-best_val_ndcg, best_val_hr = 0.0, 0.0
+
+#%%
+best_valid_ndcg, best_valid_hr = 0.0, 0.0
 best_test_ndcg, best_test_hr = 0.0, 0.0
-T = 0.0
-t0 = time.time()
-for epoch in range(epoch_start_idx, args.num_epochs + 1):
-    if args.inference_only: break # just to decrease identition
-    for step in range(num_batch): # tqdm(range(num_batch), total=num_batch, ncols=70, leave=False, unit='b'):
-        u, seq, pos, neg = sampler.next_batch() # tuples to ndarray
-        u, seq, pos, neg = np.array(u), np.array(seq), np.array(pos), np.array(neg)
-        pos_logits, neg_logits = model(u, seq, pos, neg)
+best_epoch = 0
+model.train()
+for epoch in range(1, args.num_epochs + 1):
+
+    for step in range(total_batch):
+        user_ids, log_seqs, pos_seqs, neg_seqs = sampler.next_batch()
+        user_ids, log_seqs, pos_seqs, neg_seqs = np.array(user_ids), np.array(log_seqs), np.array(pos_seqs), np.array(neg_seqs)
+        pos_logits, neg_logits = model(user_ids, log_seqs, pos_seqs, neg_seqs)
         pos_labels, neg_labels = torch.ones(pos_logits.shape, device=args.device), torch.zeros(neg_logits.shape, device=args.device)
-        # print("\neye ball check raw_logits:"); print(pos_logits); print(neg_logits) # check pos_logits > 0, neg_logits < 0
+
         adam_optimizer.zero_grad()
-        indices = np.where(pos != 0)
+        indices = np.where(pos_seqs != 0)
         loss = bce_criterion(pos_logits[indices], pos_labels[indices])
         loss += bce_criterion(neg_logits[indices], neg_labels[indices])
         for param in model.item_emb.parameters():
@@ -132,38 +120,39 @@ for epoch in range(epoch_start_idx, args.num_epochs + 1):
         adam_optimizer.step()
         print("loss in epoch {} iteration {}: {}".format(epoch, step, loss.item())) # expected 0.4~0.6 after init few epochs
 
-    if epoch % 20 == 0:
+    if epoch % args.evaluate_interval == 0:
         model.eval()
-        t1 = time.time() - t0
-        T += t1
         print('Evaluating', end='')
-        t_test = evaluate(model, dataset, args)
         t_valid = evaluate_valid(model, dataset, args)
-        print('epoch:%d, time: %f(s), valid (NDCG@10: %.4f, HR@10: %.4f), test (NDCG@10: %.4f, HR@10: %.4f)'
-                % (epoch, T, t_valid[0], t_valid[1], t_test[0], t_test[1]))
+        t_test = evaluate(model, dataset, args)
+        print(f"epoch:{epoch}, valid (NDCG@10: {t_valid[0]}, HR@10: {t_valid[1]}), test (NDCG@10: {t_test[0]}, HR@10: {t_test[1]})")
 
-        if t_valid[0] > best_val_ndcg or t_valid[1] > best_val_hr or t_test[0] > best_test_ndcg or t_test[1] > best_test_hr:
-            best_val_ndcg = max(t_valid[0], best_val_ndcg)
-            best_val_hr = max(t_valid[1], best_val_hr)
-            best_test_ndcg = max(t_test[0], best_test_ndcg)
-            best_test_hr = max(t_test[1], best_test_hr)
-            folder = args.dataset + '_' + args.train_dir
-            fname = 'SASRec.epoch={}.lr={}.layer={}.head={}.hidden={}.maxlen={}.pth'
-            fname = fname.format(epoch, args.lr, args.num_blocks, args.num_heads, args.hidden_units, args.maxlen)
-            torch.save(model.state_dict(), os.path.join(folder, fname))
+        if t_valid[0] > best_valid_ndcg:
+            best_valid_ndcg = t_valid[0]
+            best_valid_hr = t_valid[1]
+            best_test_ndcg = t_test[0]
+            best_test_hr = t_test[1]
+            best_epoch = epoch
 
-        f.write(str(epoch) + ' ' + str(t_valid) + ' ' + str(t_test) + '\n')
-        f.flush()
-        t0 = time.time()
+            torch.save(model.state_dict(), os.path.join(folder, args.fname))
+
+        if wandb_login:
+            wandb_var.log(
+                {
+                "valid_ndcg@10": t_valid[0],
+                "valid_hr@10": t_valid[1],
+                "test_ndcg@10": t_test[0],
+                "test_HR@10": t_test[1],
+                "best_valid_ndcg@10": best_valid_ndcg,
+                "best_valid_HR@10": best_valid_hr,
+                "best_test_ndcg@10": best_test_ndcg,
+                "best_test_HR@10": best_test_hr,
+                "best_epoch": best_epoch,
+                }
+            )
+
         model.train()
     
-    if epoch == args.num_epochs:
-        folder = args.dataset + '_' + args.train_dir
-        fname = 'SASRec.epoch={}.lr={}.layer={}.head={}.hidden={}.maxlen={}.pth'
-        fname = fname.format(args.num_epochs, args.lr, args.num_blocks, args.num_heads, args.hidden_units, args.maxlen)
-        torch.save(model.state_dict(), os.path.join(folder, fname))
-    
-f.close()
 sampler.close()
 print("Done")
 
